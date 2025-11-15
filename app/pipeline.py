@@ -40,34 +40,34 @@ _index = None
 def load_singletons():
     global _yolo, _clip, _clip_pre, _pc, _index
     
-    print("🔄 Loading singletons...")
+    print("Loading singletons...")
     start_time = time.time()
 
     if _clip is None:
-        print("📎 Loading CLIP model...")
+        print("Loading CLIP model...")
         clip_start = time.time()
         clip_model, _, clip_preprocess = open_clip.create_model_and_transforms(
             CLIP_MODEL_NAME, pretrained=CLIP_PRETRAINED
         )
         _clip = clip_model.to(device).eval()
         _clip_pre = clip_preprocess
-        print(f"✅ CLIP model loaded in {time.time() - clip_start:.2f}s")
+        print(f"CLIP model loaded in {time.time() - clip_start:.2f}s")
 
     if _yolo is None:
-        print("🎯 Loading YOLO model...")
+        print("Loading YOLO model...")
         yolo_start = time.time()
         _yolo = YOLO(MODEL_PATH)
-        print(f"✅ YOLO model loaded in {time.time() - yolo_start:.2f}s")
+        print(f"YOLO model loaded in {time.time() - yolo_start:.2f}s")
 
     if _pc is None:
-        print("📊 Connecting to Pinecone...")
+        print("Connecting to Pinecone...")
         pc_start = time.time()
         _pc = Pinecone(api_key=PINECONE_API_KEY)
         _index = _pc.Index(PINECONE_INDEX_NAME)
-        print(f"✅ Pinecone connected in {time.time() - pc_start:.2f}s")
+        print(f"Pinecone connected in {time.time() - pc_start:.2f}s")
 
     total_time = time.time() - start_time
-    print(f"🚀 All singletons loaded in {total_time:.2f}s")
+    print(f"All singletons loaded in {total_time:.2f}s")
     return _yolo, _clip, _clip_pre, _index
 
 # --------------------
@@ -111,7 +111,7 @@ def _letterbox_square_rgb(rgb: np.ndarray, size: int, pad_val=114):
 
 @torch.no_grad()
 def embed_image_letterbox(img_pil: Image.Image, clip_model) -> np.ndarray:
-    print("🖼️  Embedding image with CLIP...")
+    print("Embedding image with CLIP...")
     embed_start = time.time()
     
     Ht, Wt = _clip_target_hw(clip_model)
@@ -130,21 +130,21 @@ def embed_image_letterbox(img_pil: Image.Image, clip_model) -> np.ndarray:
     feat = feat / feat.norm(dim=-1, keepdim=True)
     
     embed_time = time.time() - embed_start
-    print(f"✅ Image embedded in {embed_time:.3f}s")
+    print(f"===============> Image embedded in {embed_time:.3f}s")
     return feat.float().cpu().numpy().flatten().astype(np.float32)
 
 def preprocess_query(img_pil: Image.Image) -> Image.Image:
-    print("🔧 Preprocessing query image...")
+    print("Preprocessing query image...")
     img_pil = img_pil.convert("RGB")
     img_pil = ImageOps.exif_transpose(img_pil)
     w, h = img_pil.size
     crop_box = (int(0.05*w), int(0.05*h), int(0.95*w), int(0.95*h))
     result = img_pil.crop(crop_box)
-    print(f"✅ Image preprocessed: {w}x{h} -> {result.size[0]}x{result.size[1]}")
+    print(f"Image preprocessed: {w}x{h} -> {result.size[0]}x{result.size[1]}")
     return result
 
 def detect_cards_yolo(yolo, img_bgr, conf=0.6):
-    print(f"🎯 Running YOLO detection with confidence {conf}...")
+    print(f"Running YOLO detection with confidence {conf}...")
     detect_start = time.time()
     
     res = yolo(img_bgr, conf=conf, verbose=False)
@@ -153,7 +153,7 @@ def detect_cards_yolo(yolo, img_bgr, conf=0.6):
     
     detect_time = time.time() - detect_start
     num_detections = len(boxes) if boxes is not None else 0
-    print(f"✅ YOLO detected {num_detections} cards in {detect_time:.3f}s")
+    print(f"===============> YOLO detected {num_detections} cards in {detect_time:.3f}s")
     return boxes, names
 
 def crop_with_padding(img, box, pad=20):
@@ -175,7 +175,7 @@ def order_points(pts):
     return rect
 
 def warp_card(image, debug_view=False, min_area_abs=5000, min_box_ratio=40.0):
-    print("🔄 Attempting perspective correction...")
+    print("Attempting perspective correction...")
     warp_start = time.time()
     
     def poly_area(pts):
@@ -222,7 +222,7 @@ def warp_card(image, debug_view=False, min_area_abs=5000, min_box_ratio=40.0):
         candidates.append((rect_score*A, quad))
 
     if not candidates:
-        print("⚠️  No valid card contours found, using original crop")
+        print("No valid card contours found, using original crop")
         return image, gray, edges
 
     _, quad = max(candidates, key=lambda t: t[0])
@@ -238,18 +238,18 @@ def warp_card(image, debug_view=False, min_area_abs=5000, min_box_ratio=40.0):
                                  borderMode=cv2.BORDER_REPLICATE)
 
     if warped.size == 0 or np.std(warped) < 2.0:
-        print("⚠️  Warped image is invalid, using original")
+        print("Warped image is invalid, using original")
         return image, gray, edges
     
     warp_time = time.time() - warp_start
-    print(f"✅ Perspective correction completed in {warp_time:.3f}s")
+    print(f"===============> Perspective correction completed in {warp_time:.3f}s")
     return warped, gray, edges
 
 # --------------------
 # Pinecone search
 # --------------------
 def search_by_image_with_filter(img_pil: Image.Image, label: Optional[str], top_k: int, clip_model, index):
-    print(f"🔍 Searching Pinecone for similar cards (label: {label}, top_k: {top_k})...")
+    # print(f"Searching Pinecone for similar cards (label: {label}, top_k: {top_k})...")
     search_start = time.time()
     
     img_pil = preprocess_query(img_pil)
@@ -261,20 +261,20 @@ def search_by_image_with_filter(img_pil: Image.Image, label: Optional[str], top_
             "card_type": {"$in": LABEL_FILTER_RULES[label]},
             "model": {"$eq": CLIP_METADATA_VALUE}
         }
-        print(f"🔧 Applied filter for card type: {label}")
+        # print(f"Applied filter for card type: {label}")
 
     results = index.query(
         vector=qvec.tolist(),
         namespace="image",
-        top_k=top_k * 3,
+        top_k=1,
         include_metadata=True,
         filter=pinecone_filter,
     )
     matches = results.get("matches") or []
-    print(f"📊 Pinecone returned {len(matches)} matches")
+    print(f"Pinecone returned {len(matches)} matches")
     
     if not matches:
-        print("❌ No matches found in Pinecone")
+        print("No matches found in Pinecone")
         return []
 
     grouped = {}
@@ -287,11 +287,11 @@ def search_by_image_with_filter(img_pil: Image.Image, label: Optional[str], top_
 
     final_results = sorted(grouped.values(), key=lambda x: x["score"], reverse=True)[:top_k]
     search_time = time.time() - search_start
-    print(f"✅ Search completed in {search_time:.3f}s, returning {len(final_results)} unique cards")
+    print(f"===============> Search completed in {search_time:.3f}s, returning {len(final_results)} unique cards")
     
     if final_results:
         best_match = final_results[0]
-        print(f"🏆 Best match: {best_match.get('name', 'Unknown')} (score: {best_match.get('score', 0):.4f})")
+        print(f"Best match: {best_match.get('name', 'Unknown')} (score: {best_match.get('score', 0):.4f})")
     
     return final_results
 
@@ -299,157 +299,157 @@ def search_by_image_with_filter(img_pil: Image.Image, label: Optional[str], top_
 # Public API (used by FastAPI)
 # --------------------
 def detect_card_names(image_path: str, conf: float = 0.6, top_k: int = 5) -> List[str]:
-    print(f"\n🚀 Starting card name detection for: {os.path.basename(image_path)}")
+    print(f"\nStarting card name detection for: {os.path.basename(image_path)}")
     total_start = time.time()
     
     yolo, clip_model, _, index = load_singletons()
 
-    print("📖 Loading image...")
+    print("Loading image...")
     img_bgr = cv2.imread(image_path)
     if img_bgr is None:
-        print(f"❌ Cannot read image: {image_path}")
+        print(f"Cannot read image: {image_path}")
         raise ValueError(f"Cannot read image: {image_path}")
     
-    print(f"✅ Image loaded: {img_bgr.shape[1]}x{img_bgr.shape[0]}")
+    print(f"Image loaded: {img_bgr.shape[1]}x{img_bgr.shape[0]}")
 
     max_size = 1280
     if max(img_bgr.shape[:2]) > max_size:
-        print(f"🔄 Resizing image from {img_bgr.shape[1]}x{img_bgr.shape[0]} to fit {max_size}px")
+        # print(f"Resizing image from {img_bgr.shape[1]}x{img_bgr.shape[0]} to fit {max_size}px")
         scale = max_size / max(img_bgr.shape[:2])
         img_bgr = cv2.resize(img_bgr, (int(img_bgr.shape[1]*scale), int(img_bgr.shape[0]*scale)))
-        print(f"✅ Image resized to: {img_bgr.shape[1]}x{img_bgr.shape[0]}")
+        # print(f"Image resized to: {img_bgr.shape[1]}x{img_bgr.shape[0]}")
 
     boxes, class_names = detect_cards_yolo(yolo, img_bgr, conf)
     if len(boxes) == 0:
-        print("❌ No cards detected")
+        print("No cards detected")
         return []
 
     names: List[str] = []
     for i, box in enumerate(boxes):
-        print(f"\n🎴 Processing card {i+1}/{len(boxes)}...")
+        print(f"\nProcessing card {i+1}/{len(boxes)}...")
         
         cls_id = int(box.cls[0]) if hasattr(box, "cls") else -1
         label = class_names[cls_id] if (class_names and 0 <= cls_id < len(class_names)) else f"Card {i+1}"
-        print(f"🏷️  Card type: {label}")
+        print(f"Card type: {label}")
 
-        print("✂️  Cropping card from detection...")
+        print("Cropping card from detection...")
         crop_bgr = crop_with_padding(img_bgr, box)
-        print(f"✅ Cropped to: {crop_bgr.shape[1]}x{crop_bgr.shape[0]}")
+        print(f"Cropped to: {crop_bgr.shape[1]}x{crop_bgr.shape[0]}")
 
         # warp if aspect looks wrong
         h, w = crop_bgr.shape[:2]
         expect = 1.46; tol = 0.1
         r_hw, r_wh = h / w, w / h
         if (expect - tol) <= r_hw <= (expect + tol) or (expect - tol) <= r_wh <= (expect + tol):
-            print("✅ Aspect ratio is good, skipping perspective correction")
+            # print("Aspect ratio is good, skipping perspective correction")
             warped_bgr = crop_bgr
         else:
-            print(f"⚠️  Aspect ratio {r_hw:.2f} needs correction (expected ~{expect})")
+            # print(f"Aspect ratio {r_hw:.2f} needs correction (expected ~{expect})")
             warped_bgr, _, _ = warp_card(crop_bgr, debug_view=False)
 
         if warped_bgr.shape[1] > warped_bgr.shape[0]:
-            print("🔄 Rotating card to portrait orientation")
+            # print("Rotating card to portrait orientation")
             warped_bgr = cv2.rotate(warped_bgr, cv2.ROTATE_90_CLOCKWISE)
 
         # try 0 and 180
-        print("🔄 Testing card orientations (0° and 180°)...")
+        # print("Testing card orientations (0° and 180°)...")
         candidates = [warped_bgr, cv2.rotate(warped_bgr, cv2.ROTATE_180)]
         best = None; best_score = -1.0
         
         for j, cand in enumerate(candidates):
             angle = "0°" if j == 0 else "180°"
-            print(f"🔍 Testing orientation {angle}...")
+            # print(f"Testing orientation {angle}...")
             pil = Image.fromarray(cv2.cvtColor(cand, cv2.COLOR_BGR2RGB))
             res = search_by_image_with_filter(pil, label=label, top_k=top_k, clip_model=clip_model, index=index)
             if res and float(res[0].get("score", 0)) > best_score:
                 best, best_score = res[0], float(res[0].get("score", 0))
-                print(f"🎯 New best orientation: {angle} (score: {best_score:.4f})")
+                # print(f"New best orientation: {angle} (score: {best_score:.4f})")
         
         if best:
             card_name = best.get("name")
             names.append(card_name)
-            print(f"✅ Card {i+1} identified: {card_name}")
+            print(f"Card {i+1} identified: {card_name}")
         else:
-            print(f"❌ Card {i+1} could not be identified")
+            print(f"Card {i+1} could not be identified")
     
     total_time = time.time() - total_start
-    print(f"\n🏁 Detection completed in {total_time:.2f}s")
-    print(f"📋 Final results: {names}")
+    print(f"\n===============> Detection completed in {total_time:.2f}s")
+    print(f"Final results: {names}")
     return names
 
 def detect_card_ids(image_path: str, conf: float = 0.6, top_k: int = 5) -> List[str]:
-    print(f"\n🚀 Starting card ID detection for: {os.path.basename(image_path)}")
+    print(f"\nStarting card ID detection for: {os.path.basename(image_path)}")
     total_start = time.time()
     
     yolo, clip_model, _, index = load_singletons()
 
-    print("📖 Loading image...")
+    print("Loading image...")
     img_bgr = cv2.imread(image_path)
     if img_bgr is None:
-        print(f"❌ Cannot read image: {image_path}")
+        print(f"Cannot read image: {image_path}")
         raise ValueError(f"Cannot read image: {image_path}")
     
-    print(f"✅ Image loaded: {img_bgr.shape[1]}x{img_bgr.shape[0]}")
+    print(f"Image loaded: {img_bgr.shape[1]}x{img_bgr.shape[0]}")
 
     max_size = 1280
     if max(img_bgr.shape[:2]) > max_size:
-        print(f"🔄 Resizing image from {img_bgr.shape[1]}x{img_bgr.shape[0]} to fit {max_size}px")
+        # print(f"Resizing image from {img_bgr.shape[1]}x{img_bgr.shape[0]} to fit {max_size}px")
         scale = max_size / max(img_bgr.shape[:2])
         img_bgr = cv2.resize(img_bgr, (int(img_bgr.shape[1]*scale), int(img_bgr.shape[0]*scale)))
-        print(f"✅ Image resized to: {img_bgr.shape[1]}x{img_bgr.shape[0]}")
+        # print(f"Image resized to: {img_bgr.shape[1]}x{img_bgr.shape[0]}")
 
     boxes, class_names = detect_cards_yolo(yolo, img_bgr, conf)
     if len(boxes) == 0:
-        print("❌ No cards detected")
+        print("No cards detected")
         return []
 
     ids: List[str] = []
     for i, box in enumerate(boxes):
-        print(f"\n🎴 Processing card {i+1}/{len(boxes)}...")
+        print(f"\nProcessing card {i+1}/{len(boxes)}...")
         
         cls_id = int(box.cls[0]) if hasattr(box, "cls") else -1
         label = class_names[cls_id] if (class_names and 0 <= cls_id < len(class_names)) else f"Card {i+1}"
-        print(f"🏷️  Card type: {label}")
+        print(f"Card type: {label}")
 
-        print("✂️  Cropping card from detection...")
+        # print("Cropping card from detection...")
         crop_bgr = crop_with_padding(img_bgr, box)
-        print(f"✅ Cropped to: {crop_bgr.shape[1]}x{crop_bgr.shape[0]}")
+        # print(f"Cropped to: {crop_bgr.shape[1]}x{crop_bgr.shape[0]}")
 
         h, w = crop_bgr.shape[:2]
         expect = 1.46; tol = 0.1
         r_hw, r_wh = h / w, w / h
         if (expect - tol) <= r_hw <= (expect + tol) or (expect - tol) <= r_wh <= (expect + tol):
-            print("✅ Aspect ratio is good, skipping perspective correction")
+            # print("Aspect ratio is good, skipping perspective correction")
             warped_bgr = crop_bgr
         else:
-            print(f"⚠️  Aspect ratio {r_hw:.2f} needs correction (expected ~{expect})")
+            # print(f"Aspect ratio {r_hw:.2f} needs correction (expected ~{expect})")
             warped_bgr, _, _ = warp_card(crop_bgr, debug_view=False)
 
         if warped_bgr.shape[1] > warped_bgr.shape[0]:
-            print("🔄 Rotating card to portrait orientation")
+            # print("Rotating card to portrait orientation")
             warped_bgr = cv2.rotate(warped_bgr, cv2.ROTATE_90_CLOCKWISE)
 
-        print("🔄 Testing card orientations (0° and 180°)...")
+        # print("Testing card orientations (0° and 180°)...")
         candidates = [warped_bgr, cv2.rotate(warped_bgr, cv2.ROTATE_180)]
         best = None; best_score = -1.0
         
         for j, cand in enumerate(candidates):
             angle = "0°" if j == 0 else "180°"
-            print(f"🔍 Testing orientation {angle}...")
+            print(f"Testing orientation {angle}...")
             pil = Image.fromarray(cv2.cvtColor(cand, cv2.COLOR_BGR2RGB))
             res = search_by_image_with_filter(pil, label=label, top_k=top_k, clip_model=_clip, index=_index)
             if res and float(res[0].get("score", 0)) > best_score:
                 best, best_score = res[0], float(res[0].get("score", 0))
-                print(f"🎯 New best orientation: {angle} (score: {best_score:.4f})")
+                # print(f"New best orientation: {angle} (score: {best_score:.4f})")
         
         if best:
             card_id = best.get("card_id")
             ids.append(card_id)
-            print(f"✅ Card {i+1} identified: {card_id}")
+            print(f"Card {i+1} identified: {card_id}")
         else:
-            print(f"❌ Card {i+1} could not be identified")
+            print(f"Card {i+1} could not be identified")
     
     total_time = time.time() - total_start
-    print(f"\n🏁 Detection completed in {total_time:.2f}s")
-    print(f"📋 Final results: {ids}")
+    print(f"\nDetection completed in {total_time:.2f}s")
+    print(f"Final results: {ids}")
     return ids
