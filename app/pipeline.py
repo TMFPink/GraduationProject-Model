@@ -258,9 +258,27 @@ def search_by_image_with_filter(img_pil: Image.Image, label: Optional[str], top_
     pinecone_filter = None
     if label and label in LABEL_FILTER_RULES:
         pinecone_filter = {
-            "card_type": {"$in": LABEL_FILTER_RULES[label]},
-            "model": {"$eq": CLIP_METADATA_VALUE}
+            "$and": [
+                # Allowed card types
+                {"card_type": {"$in": LABEL_FILTER_RULES[label]}},
+
+                # Only use new CLIP vectors (your environment value)
+                {"model": {"$eq": CLIP_METADATA_VALUE}},
+
+                # Only modalities you want
+                {"modality": {"$in": ["image", "image_rotated"]}},
+
+                # Exclude ONLY old embeddings:
+                # (modality = "image" AND model = "ViT-H-14")
+                {
+                    "$or": [
+                        {"modality": {"$ne": "image"}},
+                        {"model": {"$ne": "ViT-H-14"}},
+                    ]
+                },
+            ]
         }
+
         # print(f"Applied filter for card type: {label}")
 
     results = index.query(
@@ -314,10 +332,13 @@ def detect_card_names(image_path: str, conf: float = 0.6, top_k: int = 5) -> Lis
 
     max_size = 1280
     if max(img_bgr.shape[:2]) > max_size:
-        # print(f"Resizing image from {img_bgr.shape[1]}x{img_bgr.shape[0]} to fit {max_size}px")
         scale = max_size / max(img_bgr.shape[:2])
-        img_bgr = cv2.resize(img_bgr, (int(img_bgr.shape[1]*scale), int(img_bgr.shape[0]*scale)))
-        # print(f"Image resized to: {img_bgr.shape[1]}x{img_bgr.shape[0]}")
+        img_bgr = cv2.resize(
+            img_bgr,
+            (int(img_bgr.shape[1] * scale),
+             int(img_bgr.shape[0] * scale))
+        )
+        print(f"Image resized to: {img_bgr.shape[1]}x{img_bgr.shape[0]}")
 
     boxes, class_names = detect_cards_yolo(yolo, img_bgr, conf)
     if len(boxes) == 0:
@@ -329,53 +350,123 @@ def detect_card_names(image_path: str, conf: float = 0.6, top_k: int = 5) -> Lis
         print(f"\nProcessing card {i+1}/{len(boxes)}...")
         
         cls_id = int(box.cls[0]) if hasattr(box, "cls") else -1
-        label = class_names[cls_id] if (class_names and 0 <= cls_id < len(class_names)) else f"Card {i+1}"
-        print(f"Card type: {label}")
+        label = (
+            class_names[cls_id]
+            if (class_names and 0 <= cls_id < len(class_names))
+            else f"Card {i+1}"
+        )
 
-        print("Cropping card from detection...")
+        # --- Crop ---
         crop_bgr = crop_with_padding(img_bgr, box)
-        print(f"Cropped to: {crop_bgr.shape[1]}x{crop_bgr.shape[0]}")
 
-        # warp if aspect looks wrong
+        # --- Warp if aspect looks wrong ---
         h, w = crop_bgr.shape[:2]
-        expect = 1.46; tol = 0.1
+        expect = 1.46
+        tol = 0.1
         r_hw, r_wh = h / w, w / h
         if (expect - tol) <= r_hw <= (expect + tol) or (expect - tol) <= r_wh <= (expect + tol):
-            # print("Aspect ratio is good, skipping perspective correction")
+            print("Aspect ratio is good, skipping perspective correction")
             warped_bgr = crop_bgr
         else:
-            # print(f"Aspect ratio {r_hw:.2f} needs correction (expected ~{expect})")
+            print(f"Aspect ratio {r_hw:.2f} / {r_wh:.2f} needs correction (expected ~{expect})")
             warped_bgr, _, _ = warp_card(crop_bgr, debug_view=False)
 
-        if warped_bgr.shape[1] > warped_bgr.shape[0]:
-            # print("Rotating card to portrait orientation")
+        # --- Rotate to portrait if sideways (only 90°, no 180° search) ---
+        h, w = warped_bgr.shape[:2]
+        if w > h:
+            print("Rotating card to portrait orientation (90° clockwise)")
             warped_bgr = cv2.rotate(warped_bgr, cv2.ROTATE_90_CLOCKWISE)
 
-        # try 0 and 180
-        # print("Testing card orientations (0° and 180°)...")
-        candidates = [warped_bgr, cv2.rotate(warped_bgr, cv2.ROTATE_180)]
-        best = None; best_score = -1.0
-        
-        for j, cand in enumerate(candidates):
-            angle = "0°" if j == 0 else "180°"
-            # print(f"Testing orientation {angle}...")
-            pil = Image.fromarray(cv2.cvtColor(cand, cv2.COLOR_BGR2RGB))
-            res = search_by_image_with_filter(pil, label=label, top_k=top_k, clip_model=clip_model, index=index)
-            if res and float(res[0].get("score", 0)) > best_score:
-                best, best_score = res[0], float(res[0].get("score", 0))
-                # print(f"New best orientation: {angle} (score: {best_score:.4f})")
-        
+        # --- Single query (no 0°/180° candidates) ---
+        print("Querying Pinecone with final warped card (no rotation search)...")
+        pil = Image.fromarray(cv2.cvtColor(warped_bgr, cv2.COLOR_BGR2RGB))
+
+        best = None
+        best_score = -1.0
+        try:
+            res = search_by_image_with_filter(
+                pil,
+                label=label,
+                top_k=top_k,
+                clip_model=clip_model,
+                index=index,
+            )
+            if res:
+                best = res[0]
+                best_score = float(best.get("score", 0.0))
+                print(f"Best score: {best_score:.4f}")
+        except Exception as e:
+            print(f"Search failed for card {i+1} ({label}): {e}")
+
         if best:
             card_name = best.get("name")
             names.append(card_name)
             print(f"Card {i+1} identified: {card_name}")
         else:
             print(f"Card {i+1} could not be identified")
-    
+
     total_time = time.time() - total_start
     print(f"\n===============> Detection completed in {total_time:.2f}s")
     print(f"Final results: {names}")
     return names
+
+def detect_card_names_single_query(image_path: str, conf: float = 0.6, top_k: int = 5) -> List[str]:
+    print(f"\nStarting SINGLE-query card NAME detection for: {os.path.basename(image_path)}")
+    total_start = time.time()
+    
+    yolo, clip_model, _, index = load_singletons()
+
+    img_bgr = cv2.imread(image_path)
+    if img_bgr is None:
+        raise ValueError(f"Cannot read image: {image_path}")
+    
+    if max(img_bgr.shape[:2]) > 1280:
+        scale = 1280 / max(img_bgr.shape[:2])
+        img_bgr = cv2.resize(img_bgr, (int(img_bgr.shape[1]*scale), int(img_bgr.shape[0]*scale)))
+
+    boxes, class_names = detect_cards_yolo(yolo, img_bgr, conf)
+    if len(boxes) == 0:
+        print("No cards detected")
+        return []
+
+    names: List[str] = []
+    for i, box in enumerate(boxes):
+        print(f"\nProcessing card {i+1}/{len(boxes)}...")
+
+        cls_id = int(box.cls[0]) if hasattr(box, "cls") else -1
+        label = class_names[cls_id] if (class_names and 0 <= cls_id < len(class_names)) else f"Card {i+1}"
+        print(f"Card type: {label}")
+
+        crop_bgr = crop_with_padding(img_bgr, box)
+
+        h, w = crop_bgr.shape[:2]
+        expect = 1.46; tol = 0.1
+        r_hw, r_wh = h / w, w / h
+        if (expect - tol) <= r_hw <= (expect + tol) or (expect - tol) <= r_wh <= (expect + tol):
+            warped_bgr = crop_bgr
+        else:
+            warped_bgr, _, _ = warp_card(crop_bgr, debug_view=False)
+
+        # Rotate to portrait if landscape
+        if warped_bgr.shape[1] > warped_bgr.shape[0]:
+            warped_bgr = cv2.rotate(warped_bgr, cv2.ROTATE_90_CLOCKWISE)
+
+        # --- single query only ---
+        pil = Image.fromarray(cv2.cvtColor(warped_bgr, cv2.COLOR_BGR2RGB))
+        res = search_by_image_with_filter(pil, label=label, top_k=top_k, clip_model=clip_model, index=index)
+
+        if res:
+            card_name = res[0].get("name")
+            names.append(card_name)
+            print(f"Card {i+1} identified: {card_name}")
+        else:
+            print(f"Card {i+1} could not be identified")
+
+    total_time = time.time() - total_start
+    print(f"\n===============> SINGLE-query detection completed in {total_time:.2f}s")
+    print(f"Final results: {names}")
+    return names
+
 
 def detect_card_ids(image_path: str, conf: float = 0.6, top_k: int = 5) -> List[str]:
     print(f"\nStarting card ID detection for: {os.path.basename(image_path)}")

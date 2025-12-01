@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  api:
+    image: nguyenhongtranminh/tcgplatform-api
+    container_name: tcgplatform-api
+    ports:
+      - '3000:3000'
+    env_file:
+      - ../environment/.env
+    volumes:
+      # Only mount .env file for runtime configuration
+      - ../environment/.env:/app/.env:ro
+      # Prevent overwriting node_modules with an empty host directory
+      - /app/node_modules
+    depends_on:
+      - card-detection-api
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'node', '-e', "require('http').get('http://localhost:3000', res => process.exit(res.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  card-detection-api:
+    image: nguyenhongtranminh/tcgplatform-card-detection-model
+    container_name: tcgplatform-card-detection-api
+    ports:
+      - '8000:8000'
+    env_file:
+      - ../environment/.env
+    volumes:
+      # Mount environment and model folder (read-only)
+      - ../environment/.env:/app/app/.env:ro
+      - ../environment/models:/app/models:ro
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:8000/health']
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+networks:
+  app-network:
+    driver: bridge
