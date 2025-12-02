@@ -248,28 +248,31 @@ def warp_card(image, debug_view=False, min_area_abs=5000, min_box_ratio=40.0):
 # --------------------
 # Pinecone search
 # --------------------
-def search_by_image_with_filter(img_pil: Image.Image, label: Optional[str], top_k: int, clip_model, index):
-    # print(f"Searching Pinecone for similar cards (label: {label}, top_k: {top_k})...")
+def search_by_image_with_filter(
+    img_pil: Image.Image,
+    label: Optional[str],
+    top_k: int,
+    clip_model,
+    index,
+):
     search_start = time.time()
-    
+
+    # 1) preprocess + embed (matches Colab logic)
     img_pil = preprocess_query(img_pil)
     qvec = embed_image_letterbox(img_pil, clip_model)
+    vec_list = qvec.tolist()
 
+    # 2) build filter (Colab-style)
     pinecone_filter = None
     if label and label in LABEL_FILTER_RULES:
+        allowed_types = LABEL_FILTER_RULES[label]
+
         pinecone_filter = {
             "$and": [
-                # Allowed card types
-                {"card_type": {"$in": LABEL_FILTER_RULES[label]}},
-
-                # Only use new CLIP vectors (your environment value)
-                {"model": {"$eq": CLIP_METADATA_VALUE}},
-
-                # Only modalities you want
+                {"card_type": {"$in": allowed_types}},
                 {"modality": {"$in": ["image", "image_rotated"]}},
 
-                # Exclude ONLY old embeddings:
-                # (modality = "image" AND model = "ViT-H-14")
+                # Exclude ONLY old embeddings (modality = "image" AND model = "ViT-H-14")
                 {
                     "$or": [
                         {"modality": {"$ne": "image"}},
@@ -279,38 +282,66 @@ def search_by_image_with_filter(img_pil: Image.Image, label: Optional[str], top_
             ]
         }
 
-        # print(f"Applied filter for card type: {label}")
 
-    results = index.query(
-        vector=qvec.tolist(),
-        namespace="image",
-        top_k=1,
-        include_metadata=True,
-        filter=pinecone_filter,
-    )
-    matches = results.get("matches") or []
-    print(f"Pinecone returned {len(matches)} matches")
-    
-    if not matches:
-        print("No matches found in Pinecone")
+    # 3) query Pinecone (top_k * 3 like in Colab)
+    try:
+        res = index.query(
+            vector=vec_list,
+            namespace="image",
+            top_k=1,
+            include_metadata=True,
+            filter=pinecone_filter,
+        )
+    except Exception as e:
+        print(f"Pinecone query failed: {e}")
         return []
 
+    # 4) handle both v5 QueryResponse and dict-style responses
+    matches = getattr(res, "matches", None)
+    if matches is None and isinstance(res, dict):
+        matches = res.get("matches", [])
+
+    if not matches:
+        print("No Pinecone matches found.")
+        return []
+
+    # 5) group by card_id, keep best score per card
     grouped = {}
     for m in matches:
-        meta = m["metadata"]
-        cid = meta["card_id"]
-        score = m["score"]
-        if cid not in grouped or score > grouped[cid]["score"]:
-            grouped[cid] = {**meta, "score": score}
+        if isinstance(m, dict):
+            meta = m.get("metadata") or {}
+            score = float(m.get("score", 0.0))
+        else:
+            # Pinecone v5 QueryResponse.Match
+            meta = getattr(m, "metadata", {}) or {}
+            score = float(getattr(m, "score", 0.0))
 
-    final_results = sorted(grouped.values(), key=lambda x: x["score"], reverse=True)[:top_k]
+        card_id = meta.get("card_id")
+        if card_id is None:
+            continue
+
+        if card_id not in grouped or score > grouped[card_id]["score"]:
+            grouped[card_id] = {**meta, "score": score}
+
+    # 6) sort + truncate to top_k
+    final_results = sorted(
+        grouped.values(),
+        key=lambda x: x["score"],
+        reverse=True,
+    )[:top_k]
+
     search_time = time.time() - search_start
-    print(f"===============> Search completed in {search_time:.3f}s, returning {len(final_results)} unique cards")
-    
+    print(
+        f"==================> Search completed in {search_time:.3f}s, "
+    )
+
     if final_results:
-        best_match = final_results[0]
-        print(f"Best match: {best_match.get('name', 'Unknown')} (score: {best_match.get('score', 0):.4f})")
-    
+        best = final_results[0]
+        print(
+            f"Best match: {best.get('name', 'Unknown')} "
+            f"(score: {best.get('score', 0):.4f})"
+        )
+
     return final_results
 
 # --------------------
