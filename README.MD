@@ -1,3 +1,4 @@
-python3.10 -m venv venv # (or use the path from above)
+python3.10 -m venv venv
 source venv/bin/activate
+pip install -r requirements.txt
 uvicorn app.main:app --reload
